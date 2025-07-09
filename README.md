@@ -1279,4 +1279,52 @@ pheatmap(
   show_colnames = FALSE,
   fontsize_row = 9,
   main = "Expression Heatmap of Prognostic Biomarkers (including Novel lncRNAs)"
+
+library(DESeq2)
+library(matrixStats)
+library(ConsensusClusterPlus)
+
+# Get variance-stabilized expression matrix
+vsd_matrix <- assay(vsd)  # Rows = genes, columns = samples
+
+# Calculate variance per gene
+gene_variances <- rowVars(vsd_matrix)
+
+# Get top 2000 most variable genes
+top_genes <- order(gene_variances, decreasing = TRUE)[1:2000]
+vsd_top2000 <- vsd_matrix[top_genes, ]
+
+# Transpose so that rows = samples, columns = genes
+expr_for_clustering <- t(vsd_top2000)
+
+# Confirm shape: should be (samples x 2000 genes)
+dim(expr_for_clustering)
+head(rownames(expr_for_clustering))  # Should be like "2224", "2242", etc.
+
+
+set.seed(1234)
+
+results <- ConsensusClusterPlus(
+  d = expr_for_clustering,
+  maxK = 6,
+  reps = 1000,
+  pItem = 0.8,
+  pFeature = 1,
+  clusterAlg = "hc",
+  distance = "pearson",
+  seed = 1234,
+  plot = "png",
+  title = "Clustering_top2000_genes"
 )
+
+cluster_assignments <- results[[3]]$consensusClass  # K = 3
+
+ # Confirm alignment
+> stopifnot(names(cluster_assignments) == rownames(merged_meta_clean))
+Error: names(cluster_assignments) == rownames(merged_meta_clean) are not all TRUE
+In addition: Warning message:
+In names(cluster_assignments) == rownames(merged_meta_clean) :
+  longer object length is not a multiple of shorter object length
+> merged_meta_clean$Cluster <- as.factor(results[[3]]$consensusClass)
+Error in `$<-.data.frame`(`*tmp*`, Cluster, value = c(ENSG00000186081.12 = 1L,  : 
+  replacement has 2000 rows, data has 258
