@@ -1339,3 +1339,222 @@ Error: all(names(cluster_assignments) == rownames(merged_meta_clean)) is not TRU
 In addition: Warning message:
 In names(cluster_assignments) == rownames(merged_meta_clean) :
 longer object length is not a multiple of shorter object length
+
+# Assume md is already read in as metadataclu
+> md <- metadataclu
+> 
+> # Strip the leading "X" from SampleID
+> md$SampleID <- gsub("^X", "", md$SampleID)
+> 
+> # Set rownames to SampleID
+> rownames(md) <- md$SampleID
+> 
+> # (Optional) remove duplicate SampleID column if not needed
+> # md <- md[ , !(names(md) %in% "SampleID") ]
+> 
+> # Check the result
+> head(rownames(md))
+[1] "2224" "2242" "2251" "2265" "2285" "2289"
+> head(colnames(txi$counts))
+[1] "2224" "2242" "2251" "2265" "2285" "2289"
+> 
+> # Now they should match
+> intersect(colnames(txi$counts), rownames(md))
+  [1] "2224" "2242" "2251" "2265" "2285" "2289"
+  [7] "2305" "2323" "2334" "2341" "2347" "2349"
+ [13] "2351" "2353" "2354" "2357" "2374" "2378"
+ [19] "2382" "2395" "2396" "2397" "2403" "2409"
+ [25] "2414" "2421" "2425" "2429" "2439" "2440"
+ [31] "2442" "2456" "2462" "2473" "2496" "2506"
+ [37] "2507" "2509" "2516" "2517" "2519" "2552"
+ [43] "2566" "2568" "2570" "2573" "2584" "2589"
+ [49] "2599" "2601" "2610" "2613" "2618" "2623"
+ [55] "2629" "2638" "2646" "2649" "2680" "2690"
+ [61] "2716" "2717" "2729" "2730" "2747" "2776"
+ [67] "2798" "2804" "2808" "2829" "2896" "2900"
+ [73] "2902" "2906" "3053" "3054" "3064" "3091"
+ [79] "3123" "3131" "3139" "3167" "3184" "3186"
+ [85] "3328" "3329" "3331" "3332" "3375" "3385"
+ [91] "3391" "3393" "3431" "3461" "3463" "3468"
+ [97] "3487" "3494" "3500" "3502" "3506" "3523"
+[103] "3525" "3527" "3534" "3536" "3545" "3557"
+[109] "3577" "3625" "3631" "3639" "3654" "3662"
+[115] "3673" "3695" "3729" "3735" "3746" "3753"
+[121] "3755" "3796" "3802" "3832" "3835" "3843"
+[127] "3866" "3913" "3914" "3937" "3940" "3941"
+[133] "3944" "3945" "3948" "3956" "3957" "3960"
+[139] "3971" "3974" "3981" "3995" "3997" "4008"
+[145] "4017" "4019" "4025" "4062" "4064" "4069"
+[151] "4117" "4128" "4132" "4135" "4137" "4138"
+[157] "4150" "4153" "4156" "4157" "4158" "4166"
+[163] "4197" "4203" "4204" "4211" "4222" "4235"
+[169] "4236" "4237" "4242" "4243" "4244" "4253"
+[175] "4254" "4255" "4275" "4277" "4278" "4284"
+[181] "4288" "4291" "4300" "4309" "4310" "4311"
+[187] "4313" "4360" "4362" "4382" "4401" "4403"
+[193] "4409" "4421" "4495" "4497" "4501" "4510"
+[199] "4528" "4529" "4530" "4615" "4616" "4627"
+[205] "4631" "4662" "4676" "4681" "4683" "4702"
+[211] "4703" "4706" "4709" "4710" "4717" "4723"
+[217] "4724" "4734" "4759" "4760" "4768" "4769"
+[223] "4773" "4774" "4778" "4823" "4863" "4866"
+[229] "4867" "4876" "4879" "4884" "4890" "4891"
+[235] "4896" "4918" "4926" "4978" "4980" "4995"
+[241] "4999" "5000" "5014" "5018" "5055" "5056"
+[247] "5067" "5077" "5078" "5097" "5098" "5102"
+[253] "5120" "5148" "5149" "5161" "5222" "5237"
+> 
+> # --- 1) Align md with txi --------------------------------------------------
+> stopifnot(all(c("counts","abundance","length") %in% names(txi)))
+> keep <- intersect(colnames(txi$counts), rownames(md))
+> if (length(keep) < 3) stop("Not enough matching samples after ID alignment.")
+> txi$counts    <- txi$counts[, keep, drop=FALSE]
+> txi$abundance <- txi$abundance[, keep, drop=FALSE]
+> txi$length    <- txi$length[, keep, drop=FALSE]
+> md            <- md[keep, , drop=FALSE]
+> # --- 2) Build DDS (add covariates here if you have them, e.g. ~ batch + Cluster)
+> dds <- DESeqDataSetFromTximport(txi, colData = md, design = ~ Cluster)
+  the design formula contains one or more numeric variables with integer values,
+  specifying a model with increasing fold change for higher values.
+  did you mean for this to be a factor? if so, first convert
+  this variable to a factor using the factor() function
+using counts and average transcript lengths from tximport
+> # 🔧 Convert categorical columns to factors
+> md$Cluster <- factor(as.character(md$Cluster), levels = c("1","2","3","4"))
+> # If you have batch or other categorical covariates, factor those too:
+> # md$batch <- factor(md$batch)
+> 
+> # Quick sanity check
+> table(md$Cluster, useNA = "ifany")
+
+  1   2   3   4 
+163   9  73  13 
+> str(md$Cluster)
+ Factor w/ 4 levels "1","2","3","4": 1 2 3 1 1 3 1 1 3 3 ...
+> # Align with txi
+> keep <- intersect(colnames(txi$counts), rownames(md))
+> txi$counts    <- txi$counts[, keep, drop=FALSE]
+> txi$abundance <- txi$abundance[, keep, drop=FALSE]
+> txi$length    <- txi$length[, keep, drop=FALSE]
+> md            <- md[keep, , drop=FALSE]
+> # --- 2) Build DDS (add covariates here if you have them, e.g. ~ batch + Cluster)
+> dds <- DESeqDataSetFromTximport(txi, colData = md, design = ~ Cluster)
+using counts and average transcript lengths from tximport
+> 
+> # Filter very low counts (sum across all samples >= 10)
+> dds <- dds[rowSums(counts(dds)) >= 10, ]
+> 
+> # Run DESeq2 once
+> dds <- DESeq(dds)
+estimating size factors
+using 'avgTxLength' from assays(dds), correcting for library size
+estimating dispersions
+gene-wise dispersion estimates
+mean-dispersion relationship
+final dispersion estimates
+fitting model and testing
+-- replacing outliers and refitting for 1964 genes
+-- DESeq argument 'minReplicatesForReplace' = 7 
+-- original counts are preserved in counts(dds)
+estimating dispersions
+fitting model and testing
+> # --- 3) Helper to run & save a contrast -----------------------------------
+> do_contrast <- function(dds, level_ref, outdir) {
++     # 4 vs level_ref (log2FC = Cluster4 - Cluster[level_ref])
++     res_raw <- results(dds, contrast = c("Cluster","4", level_ref))
++     
++     # Shrink LFCs (apeglm if available else normal)
++     res_shrunk <- tryCatch({
++         suppressPackageStartupMessages(require(apeglm))
++         lfcShrink(dds, contrast = c("Cluster","4", level_ref), type = "apeglm")
++     }, error = function(e) {
++         message("apeglm not available; using 'normal' shrink for 4 vs ", level_ref)
++         lfcShrink(dds, contrast = c("Cluster","4", level_ref), type = "normal")
++     })
++     
++     tbl <- as.data.frame(res_shrunk) |>
++         mutate(gene_id = rownames(res_shrunk)) |>
++         relocate(gene_id) |>
++         arrange(padj, pvalue)
++     
++     dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
++     write_csv(tbl, file.path(outdir, paste0("DESeq2_Cluster4_vs_", level_ref, ".csv")))
++     saveRDS(res_raw,    file.path(outdir, paste0("res_raw_4vs", level_ref, ".rds")))
++     saveRDS(res_shrunk, file.path(outdir, paste0("res_shrunk_4vs", level_ref, ".rds")))
++     
++     cat(sprintf("\n4 vs %s: %d genes padj<0.05\n",
++                 level_ref, sum(tbl$padj < 0.05, na.rm = TRUE)))
++     invisible(tbl)
++ }
+> 
+> # --- 4) Run all pairwise: 4 vs 1, 4 vs 2, 4 vs 3 ---------------------------
+> others <- intersect(c("1","2","3"), levels(colData(dds)$Cluster))
+> out_dir <- "~/DE_Pairwise_Cluster4"
+> pairwise_tables <- lapply(others, function(lvl) do_contrast(dds, lvl, out_dir))
+apeglm not available; using 'normal' shrink for 4 vs 1
+using 'normal' for LFC shrinkage, the Normal prior from Love et al (2014).
+
+Note that type='apeglm' and type='ashr' have shown to have less bias than type='normal'.
+See ?lfcShrink for more details on shrinkage type, and the DESeq2 vignette.
+Reference: https://doi.org/10.1093/bioinformatics/bty895
+                                                  
+4 vs 1: 16220 genes padj<0.05
+apeglm not available; using 'normal' shrink for 4 vs 2
+using 'normal' for LFC shrinkage, the Normal prior from Love et al (2014).
+
+Note that type='apeglm' and type='ashr' have shown to have less bias than type='normal'.
+See ?lfcShrink for more details on shrinkage type, and the DESeq2 vignette.
+Reference: https://doi.org/10.1093/bioinformatics/bty895
+                                                  
+4 vs 2: 8315 genes padj<0.05
+apeglm not available; using 'normal' shrink for 4 vs 3
+using 'normal' for LFC shrinkage, the Normal prior from Love et al (2014).
+
+Note that type='apeglm' and type='ashr' have shown to have less bias than type='normal'.
+See ?lfcShrink for more details on shrinkage type, and the DESeq2 vignette.
+Reference: https://doi.org/10.1093/bioinformatics/bty895
+                                                  
+4 vs 3: 19333 genes padj<0.05
+Warning messages:
+1: In library(package, lib.loc = lib.loc, character.only = TRUE, logical.return = TRUE,  :
+  there is no package called ‘apeglm’
+2: In library(package, lib.loc = lib.loc, character.only = TRUE, logical.return = TRUE,  :
+  there is no package called ‘apeglm’
+3: In library(package, lib.loc = lib.loc, character.only = TRUE, logical.return = TRUE,  :
+  there is no package called ‘apeglm’
+> 
+> # Also save the DDS for later reuse
+> saveRDS(dds, file.path(out_dir, "dds_pairwise.rds"))
+> 
+> # Quick peek at top hits for 4 vs 1
+> if ("1" %in% others) head(pairwise_tables[[which(others=="1")]])
+                              gene_id baseMean
+ENSG00000133958.14 ENSG00000133958.14 119.8008
+ENSG00000144406.19 ENSG00000144406.19 289.8305
+ENSG00000186487.21 ENSG00000186487.21 618.6737
+ENSG00000077279.21 ENSG00000077279.21  82.3496
+ENSG00000255087.6   ENSG00000255087.6  96.9727
+ENSG00000166573.6   ENSG00000166573.6 311.9324
+                   log2FoldChange     lfcSE
+ENSG00000133958.14       4.650866 0.1467589
+ENSG00000144406.19       3.420675 0.1129577
+ENSG00000186487.21       3.956863 0.1323279
+ENSG00000077279.21       7.504745 0.2714818
+ENSG00000255087.6        5.198584 0.2084436
+ENSG00000166573.6        6.811142 0.2778687
+                       stat        pvalue
+ENSG00000133958.14 31.66685 4.445422e-220
+ENSG00000144406.19 30.27163 2.709652e-201
+ENSG00000186487.21 29.90851 1.525217e-196
+ENSG00000077279.21 27.55220 4.165250e-167
+ENSG00000255087.6  24.97772 1.067681e-137
+ENSG00000166573.6  24.39656 1.860166e-131
+                            padj
+ENSG00000133958.14 1.727891e-215
+ENSG00000144406.19 5.266073e-197
+ENSG00000186487.21 1.976122e-192
+ENSG00000077279.21 4.047478e-163
+ENSG00000255087.6  8.299937e-134
+ENSG00000166573.6  1.205047e-127
+>
+> 
