@@ -1557,254 +1557,123 @@ ENSG00000077279.21 4.047478e-163
 ENSG00000255087.6  8.299937e-134
 ENSG00000166573.6  1.205047e-127
 >
-># ================= KM batch (NO EGFR) =================
-suppressPackageStartupMessages({
-  library(dplyr); library(stringr); library(readr)
-  library(survival); library(survminer); library(purrr); library(tidyr)
-  library(ggplot2)
-})
+library(survival)
+> 
+> # Start from your metadata df 'md'
+> d <- md
+> 
+> # --- Choose OS columns in DAYS ---
+> time_col  <- "time_os_days"     # fallback to 'survival_days' if needed
+> event_col <- "event_os"         # fallback to 'VitalStatus' if needed
+> 
+> # 1) TIME: numeric and >= 0
+> d$time_days <- suppressWarnings(as.numeric(d[[time_col]]))
+> 
+> # 2) EVENT: strict 0/1  (map any "2" or "dead/deceased" to 1)
+> evt <- if (event_col %in% names(d)) d[[event_col]] else d$VitalStatus
+> evt_raw <- tolower(trimws(as.character(evt)))
+> d$event01 <- ifelse(evt_raw %in% c("1","2","yes","true","dead","deceased","died","event"), 1L,
++                     ifelse(evt_raw %in% c("0","no","false","alive","living","censored"), 0L, NA_integer_))
+> 
+> # 3) Example grouping: Smoking (Never vs Ever)
+> d$smoking2 <- factor(trimws(as.character(d$smoking)), levels = c("Never","Ever"))
+> 
+> # 4) Keep only valid rows
+> d_os <- subset(d, !is.na(time_days) & time_days >= 0 & event01 %in% c(0L,1L))
+> 
+> dd <- subset(d_os, !is.na(smoking2))
+> dd$smoking2 <- droplevels(dd$smoking2)
+> 
+> # KM
+> fit <- survfit(Surv(time_days, event01) ~ smoking2, data = dd)
+> 
+> # Robust base plot
+> png("KM_Smoking_Never_vs_Ever_DAYS.png", width = 1600, height = 1200, res = 200)
+> plot(fit, lwd = 2, col = 1:2, xlab = "Days", ylab = "Overall survival probability")
+> legend("bottomleft", legend = levels(dd$smoking2), col = 1:2, lwd = 2, bty = "n")
+> lr  <- survdiff(Surv(time_days, event01) ~ smoking2, data = dd)
+> p_lr <- 1 - pchisq(lr$chisq, length(lr$n) - 1)
+> mtext(sprintf("Log-rank p = %.3g", p_lr), side = 3, line = 0.5)
+> dev.off()
+null device 
+          1 
+> 
+> # Cox HR
+> cx <- coxph(Surv(time_days, event01) ~ smoking2, data = dd)
+> print(summary(cx))
+Call:
+coxph(formula = Surv(time_days, event01) ~ smoking2, data = dd)
 
-# ---------- 0) Load / prepare metadata ----------
-md <- metadataclu
+  n= 221, number of events= 142 
 
-# IDs: match your txi naming (strip leading "X"), set rownames
-md$SampleID <- gsub("^X","", trimws(md$SampleID))
-rownames(md) <- md$SampleID
+               coef exp(coef) se(coef)   z Pr(>|z|)
+smoking2Ever 0.3010    1.3513   0.2736 1.1    0.271
 
-# Optional: ensure one row per patient for survival
-if ("patientid" %in% names(md)) {
-  md <- md %>% group_by(patientid) %>% slice(1) %>% ungroup()
-}
+             exp(coef) exp(-coef) lower .95 upper .95
+smoking2Ever     1.351       0.74    0.7904      2.31
 
-# small helpers
-`%||%`  <- function(a,b) ifelse(is.null(a) || length(a)==0, b, a)
+Concordance= 0.523  (se = 0.014 )
+Likelihood ratio test= 1.31  on 1 df,   p=0.3
+Wald test            = 1.21  on 1 df,   p=0.3
+Score (logrank) test = 1.22  on 1 df,   p=0.3
 
-# ---------- 1) Build survival endpoints ----------
-md <- md %>%
-  mutate(
-    # Overall Survival (OS)
-    event_os = case_when(
-      is.numeric(VitalStatus) ~ as.integer(VitalStatus),
-      str_detect(tolower(as.character(VitalStatus)), "dead|deceased|died|1") ~ 1L,
-      str_detect(tolower(as.character(VitalStatus)), "alive|living|0")       ~ 0L,
-      TRUE ~ NA_integer_
-    ),
-    time_os_days = coalesce(
-      suppressWarnings(as.numeric(survival_days)),
-      suppressWarnings(as.numeric(round(as.numeric(survival_mo) * 30.44)))
-    ),
-    # OPTIONAL: Recurrence-Free Survival (RFS)
-    event_rfs = case_when(
-      is.numeric(recurrence) ~ as.integer(recurrence),
-      str_detect(tolower(as.character(recurrence)), "yes|y|1|recurr") ~ 1L,
-      str_detect(tolower(as.character(recurrence)), "no|n|0|none")    ~ 0L,
-      TRUE ~ NA_integer_
-    ),
-    time_rfs_days = coalesce(
-      suppressWarnings(as.numeric(FirstRec_days)),
-      suppressWarnings(as.numeric(round(as.numeric(FirstRec_mo) * 30.44)))
-    )
-  )
-
-# keep usable OS rows
-md_os <- md %>% filter(!is.na(event_os), !is.na(time_os_days), time_os_days > 0)
-
-# ---------- 2) Recode helpers (NO EGFR) ----------
-recode_gender <- function(x){
-  fct <- case_when(
-    str_detect(tolower(as.character(x)), "^m") ~ "Male",
-    str_detect(tolower(as.character(x)), "^f") ~ "Female",
-    TRUE ~ NA_character_
-  )
-  factor(fct, levels = c("Male","Female"))
-}
-
-recode_smoking_2 <- function(x){
-  fct <- case_when(
-    str_detect(tolower(as.character(x)), "never")            ~ "Never",
-    str_detect(tolower(as.character(x)), "current|curr")     ~ "Current/Former",
-    str_detect(tolower(as.character(x)), "former|ex")        ~ "Current/Former",
-    TRUE ~ NA_character_
-  )
-  factor(fct, levels = c("Never","Current/Former"))
-}
-
-recode_smoking_3 <- function(x){
-  fct <- case_when(
-    str_detect(tolower(as.character(x)), "never")            ~ "Never",
-    str_detect(tolower(as.character(x)), "former|ex")        ~ "Former",
-    str_detect(tolower(as.character(x)), "current|curr")     ~ "Current",
-    TRUE ~ NA_character_
-  )
-  factor(fct, levels = c("Never","Former","Current"))
-}
-
-packyears_cat <- function(x){
-  v <- suppressWarnings(as.numeric(x))
-  factor(ifelse(!is.na(v) & v >= 20, "≥20", "<20"), levels = c("<20","≥20"))
-}
-
-recode_stage4 <- function(x){
-  z <- toupper(trimws(as.character(x)))
-  z <- gsub("[^IVX0-9]","", z)     # keep roman/arabic chars
-  map <- c("1"="I","2"="II","3"="III","4"="IV","I"="I","II"="II","III"="III","IV"="IV")
-  y <- unname(map[z]); y[is.na(y)] <- NA
-  factor(y, levels = c("I","II","III","IV"))
-}
-stage_earlylate <- function(x){
-  s <- recode_stage4(x)
-  factor(ifelse(is.na(s), NA,
-                ifelse(s %in% c("I","II"), "I/II", "III/IV")),
-         levels = c("I/II","III/IV"))
-}
-
-tn_bin <- function(x, low=c("0"), high=setdiff(c("1","2","3","4"), low)){
-  z <- toupper(trimws(as.character(x)))
-  z <- gsub("[^0-9]","", z)
-  factor(ifelse(z %in% low, "0",
-                ifelse(z %in% high, "Positive", NA)),
-         levels = c("0","Positive"))
-}
-t_bin <- function(x) tn_bin(x, low=c("1","2"))     # T1-2 vs T3-4
-n_bin <- function(x) tn_bin(x, low=c("0"))         # N0 vs N+
-m_bin <- function(x) tn_bin(x, low=c("0"))         # M0 vs M1
-
-histology_main <- function(h_abbr=NULL, h_full=NULL, squam=NULL){
-  if(!is.null(h_abbr) && !all(is.na(h_abbr))){
-    h <- toupper(trimws(as.character(h_abbr)))
-  } else if(!is.null(h_full) && !all(is.na(h_full))){
-    h <- toupper(trimws(as.character(h_full)))
-  } else if(!is.null(squam) && !all(is.na(squam))){
-    sq <- str_detect(tolower(as.character(squam)), "1|yes|true")
-    return(factor(ifelse(sq, "Squamous","Non-squamous"),
-                  levels=c("Adeno","Squamous","Other","Non-squamous")))
-  } else return(factor(NA_character_))
-
-  fct <- case_when(
-    str_detect(h, "ADENO") ~ "Adeno",
-    str_detect(h, "SQUA")  ~ "Squamous",
-    TRUE                   ~ "Other"
-  )
-  factor(fct, levels = c("Adeno","Squamous","Other"))
-}
-
-age_cat <- function(x, cut=65){
-  v <- suppressWarnings(as.numeric(x))
-  factor(ifelse(!is.na(v) & v >= cut, paste0("≥",cut), paste0("<",cut)),
-         levels = c(paste0("<",cut), paste0("≥",cut)))
-}
-
-# ---------- 3) Variables to analyze (OS) ----------
-vars_os <- list(
-  list(name="Gender",             make=function(df) recode_gender(df$Gender), label="Gender"),
-  list(name="Smoking_2level",     make=function(df) recode_smoking_2(df$smoking), label="Smoking (Never vs Ever)"),
-  list(name="Smoking_3level",     make=function(df) recode_smoking_3(df$smoking), label="Smoking (Never/Former/Current)"),
-  list(name="PackYears_cat",      make=function(df) packyears_cat(df$PackYears), label="Pack-years (<20 vs ≥20)"),
-  list(name="Stage_4level",       make=function(df) recode_stage4(df$Stage %||% df$stage_stat), label="Stage (I–IV)"),
-  list(name="Stage_EarlyLate",    make=function(df) stage_earlylate(df$Stage %||% df$stage_stat), label="Stage (I/II vs III/IV)"),
-  list(name="T_bin",              make=function(df) t_bin(df$T), label="T category (T1–2 vs T3–4)"),
-  list(name="N_bin",              make=function(df) n_bin(df$N), label="N category (N0 vs N+)"),
-  list(name="M_bin",              make=function(df) m_bin(df$M), label="M category (M0 vs M1)"),
-  list(name="Histology_main",     make=function(df) histology_main(df$Histology_abbr, df$Histology, df$histology_squam), label="Histology"),
-  list(name="Age_65",             make=function(df) age_cat(df$age_atdx, 65), label="Age at Dx (<65 vs ≥65)")
-)
-
-# ---------- 4) Core runner (KM + logrank + Cox) ----------
-run_km <- function(df, group_vec, group_label,
-                   time_col="time_os_days", event_col="event_os",
-                   out_dir="KM_OS_noEGFR"){
-  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
-
-  dd <- df %>%
-    mutate(group = group_vec) %>%
-    filter(!is.na(.data[[time_col]]), .data[[time_col]] > 0,
-           !is.na(.data[[event_col]]),
-           !is.na(group)) %>%
-    droplevels()
-  if (nlevels(dd$group) < 2) return(invisible(NULL))
-
-  fit <- survfit(Surv(.data[[time_col]], .data[[event_col]]) ~ group, data = dd)
-
-  p <- ggsurvplot(fit, data = dd,
-                  risk.table = TRUE, conf.int = TRUE, pval = TRUE,
-                  xlab = "Days", ylab = "Overall survival probability",
-                  legend.title = group_label)
-
-  ggsave(file.path(out_dir, paste0(group_label, "_KM.png")),
-         plot = p$plot, width = 6, height = 5, dpi = 300)
-
-  # log-rank p
-  lr <- survdiff(Surv(.data[[time_col]], .data[[event_col]]) ~ group, data = dd)
-  lr_p <- 1 - pchisq(lr$chisq, length(lr$n) - 1)
-
-  # univariate Cox
-  cox <- coxph(Surv(.data[[time_col]], .data[[event_col]]) ~ group, data = dd)
-  cs  <- summary(cox)
-
-  tibble(
-    variable = group_label,
-    level    = rownames(cs$coefficients),
-    HR       = cs$coefficients[, "exp(coef)"],
-    CI_low   = cs$conf.int[, "lower .95"],
-    CI_high  = cs$conf.int[, "upper .95"],
-    z        = cs$coefficients[, "z"],
-    pvalue   = cs$coefficients[, "Pr(>|z|)"],
-    logrank_p = lr_p,
-    n        = nrow(dd),
-    n_groups = nlevels(dd$group)
-  ) %>%
-    { write_csv(., file.path(out_dir, paste0(group_label, "_cox_univariate.csv"))); . }
-}
-
-# ---------- 5) Run all OS analyses ----------
-out_dir <- "~/KM_batch_OS_noEGFR"
-dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
-
-results_list <- map(vars_os, ~{
-  cat("Running:", .x$label, "\n")
-  run_km(md_os, .x$make(md_os), .x$label, out_dir = out_dir)
-})
-
-summary_os <- bind_rows(compact(results_list))
-write_csv(summary_os, file.path(out_dir, "KM_OS_univariate_summary.csv"))
-
-# ---------- 6) OPTIONAL: adjusted Cox for selected vars (no EGFR) ----------
-md_adj <- md_os %>%
-  mutate(
-    Age_num   = suppressWarnings(as.numeric(age_atdx)),
-    Stage_EL  = stage_earlylate(Stage %||% stage_stat),
-    GenderF   = recode_gender(Gender)
-  )
-
-adj_model <- function(group_vec, label,
-                      covars = ~ Age_num + Stage_EL + GenderF){
-  dd <- md_adj %>% mutate(group = group_vec) %>%
-    filter(!is.na(group), !is.na(Age_num), !is.na(Stage_EL), !is.na(GenderF))
-  if (nlevels(droplevels(dd$group)) < 2) return(NULL)
-  form <- as.formula(paste("Surv(time_os_days, event_os) ~ group",
-                           deparse(covars)[2], sep=" + "))
-  fit <- coxph(form, data = dd); cs <- summary(fit)
-  tibble(
-    variable = paste0(label, " (adjusted)"),
-    level    = rownames(cs$coefficients)[grepl("^group", rownames(cs$coefficients))],
-    HR       = cs$coefficients[grepl("^group", rownames(cs$coefficients)), "exp(coef)"],
-    CI_low   = cs$conf.int[grepl("^group", rownames(cs$conf.int)), "lower .95"],
-    CI_high  = cs$conf.int[grepl("^group", rownames(cs$conf.int)), "upper .95"],
-    pvalue   = cs$coefficients[grepl("^group", rownames(cs$coefficients)), "Pr(>|z|)"]
-  )
-}
-
-adj_list <- list(
-  list(label="Smoking (Never vs Ever)", vec=recode_smoking_2(md_adj$smoking)),
-  list(label="Gender",                  vec=recode_gender(md_adj$Gender)),
-  list(label="Stage (I/II vs III/IV)",  vec=stage_earlylate(md_adj$Stage %||% md_adj$stage_stat))
-)
-
-adj_res <- map(adj_list, ~adj_model(.x$vec, .x$label)) %>% bind_rows()
-write_csv(adj_res, file.path(out_dir, "KM_OS_adjusted_cox_selected.csv"))
-
-# ---------- (Optional) RFS example ----------
-# run_km(md, recode_smoking_2(md$smoking), "Smoking (Never vs Ever)",
-#        time_col="time_rfs_days", event_col="event_rfs",
-#        out_dir="~/KM_batch_RFS_noEGFR")
-# ===========================================================
+> 
+> # Medians (days)
+> sf <- summary(fit)$table
+> med_tbl <- data.frame(
++     group        = rownames(sf),
++     n            = sf[, "n"],
++     median_days  = sf[, "median"],
++     lower_95     = sf[, "0.95LCL"],
++     upper_95     = sf[, "0.95UCL"],
++     row.names = NULL, check.names = FALSE
++ )
+Error in sf[, "n"] : subscript out of bounds
+> sf <- summary(fit)$table               # matrix with medians & CIs
+> labs <- rownames(sf)                   # e.g., "smoking2=Never", "smoking2=Ever"
+> grp  <- sub("^.*=", "", labs)          # -> "Never", "Ever"
+> 
+> # n per group from the data you actually analyzed:
+> n_per <- as.integer(table(dd$smoking2)[grp])
+> 
+> med_tbl <- data.frame(
++     group       = grp,
++     n           = n_per,
++     median_days = sf[, "median"],
++     lower_95    = sf[, "0.95LCL"],
++     upper_95    = sf[, "0.95UCL"],
++     row.names   = NULL, check.names = FALSE
++ )
+> 
+> write.csv(med_tbl, "KM_Smoking_Never_vs_Ever_MEDIANS_DAYS.csv", row.names = FALSE)
+> med_tbl
+  group   n median_days lower_95 upper_95
+1 Never  25        3120     2823       NA
+2  Ever 196        2494     1885     2991
+> 
+> # Make sure you have 'fit' from before:
+> fit <- survfit(Surv(time_days, event01) ~ smoking2, data = dd)
+> 
+> # Base R plot (robust, simple)
+> plot(fit, lwd = 2, col = c("blue","red"),
++      xlab = "Days", ylab = "Overall survival probability",
++      main = "Kaplan–Meier: Smoking (Never vs Ever)")
+Error in plot.new() : figure margins too large
+> # If any devices are open, close them
+> while (!is.null(dev.list())) dev.off()
+> 
+> # Fresh device sized sensibly
+> if (capabilities("aqua")) quartz(width=7, height=5) else if (.Platform$OS.type=="windows") windows(width=7, height=5) else x11(width=7, height=5)
+> 
+> par(mfrow=c(1,1), mar=c(5,5,2,1))  # bottom, left, top, right
+> 
+> plot(fit, lwd=2, col=c("blue","red"),
++      xlab="Days", ylab="Overall survival probability",
++      main="Kaplan–Meier: Smoking (Never vs Ever)")
+> legend("bottomleft", legend=levels(dd$smoking2), col=c("blue","red"), lwd=2, bty="n")
+> 
+> lr  <- survdiff(Surv(time_days, event01) ~ smoking2, data=dd)
+> p_lr <- 1 - pchisq(lr$chisq, length(lr$n)-1)
+> mtext(sprintf("Log-rank p = %.3g", p_lr), side=3, line=0.5)
+> 
+> 
