@@ -2479,7 +2479,65 @@ quartz
 quartz 
      2 
 > 
+> Cluster Survival Analysis (full time range, no 5000-day limit) ---
 > 
+> library(survival)
+> 
+> # Keep only valid rows with Cluster
+> dd_clu <- subset(d_os, !is.na(Cluster))
+> dd_clu$Cluster <- droplevels(factor(dd_clu$Cluster))
+> 
+> # KM fit
+> fit_clu <- survfit(Surv(time_days, event01) ~ Cluster, data = dd_clu)
+> 
+> # Log-rank test
+> lr_clu  <- survdiff(Surv(time_days, event01) ~ Cluster, data = dd_clu)
+> p_lr_clu <- 1 - pchisq(lr_clu$chisq, length(lr_clu$n) - 1)
+> 
+> # Plot (no xlim cap, shows full follow-up)
+> png("KM_Cluster_DAYS.png", width = 1800, height = 1200, res = 200)
+> par(mfrow=c(1,1), mar=c(5,5,3,1))
+> plot(fit_clu, lwd = 2, col = seq_len(nlevels(dd_clu$Cluster)),
++      xlab = "Days", ylab = "Overall survival probability",
++      main = "Kaplan–Meier: Consensus Clusters")
+> legend("bottomleft", legend = levels(dd_clu$Cluster),
++        col = seq_len(nlevels(dd_clu$Cluster)), lwd = 2, bty = "n")
+> mtext(sprintf("Log-rank p = %.3g", p_lr_clu), side = 3, line = 0.5)
+> dev.off()
+quartz 
+     2 
+> 
+> # Cox proportional hazards (first Cluster = reference)
+> cx_clu <- coxph(Surv(time_days, event01) ~ Cluster, data = dd_clu)
+> s_clu  <- summary(cx_clu)
+> print(s_clu)
+ # Median survival table (days) per cluster
+> sf   <- summary(fit_clu)$table
+> labs <- rownames(sf)                     # e.g., "Cluster=1"
+> grp  <- sub("^.*=", "", labs)            # -> "1", "2", etc
+> n_per <- as.integer(table(dd_clu$Cluster)[grp])
+> 
+> med_clu <- data.frame(
++     group       = grp,
++     n           = n_per,
++     median_days = sf[, "median"],
++     lower_95    = sf[, "0.95LCL"],
++     upper_95    = sf[, "0.95UCL"],
++     row.names   = NULL, check.names = FALSE
++ )
+> write.csv(med_clu, "KM_Cluster_MEDIANS_DAYS.csv", row.names = FALSE)
+> med_clu
+# HR table export
+> hr_clu <- data.frame(
++     term     = rownames(s_clu$coef),
++     HR       = s_clu$coef[, "exp(coef)"],
++     CI_lower = s_clu$conf.int[, "lower .95"],
++     CI_upper = s_clu$conf.int[, "upper .95"],
++     p_value  = s_clu$coef[, "Pr(>|z|)"],
++     row.names = NULL, check.names = FALSE
++ )
+> write.csv(hr_clu, "HR_Cluster_DAYS.csv", row.names = FALSE)
+> hr_clu
 # ================================
 # Cox + KM by Gender: one big script
 # ================================
