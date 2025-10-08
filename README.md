@@ -2480,3 +2480,129 @@ quartz
      2 
 > 
 > 
+# ================================
+# Cox + KM by Gender: one big script
+# ================================
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(survival)
+  library(survminer)  # needs ggplot2; installed with survminer
+})
+
+# ---- 0) Basic hygiene: make sure time/event look right
+dd_det <- dd_det %>%
+  mutate(
+    event01   = as.integer(event01),
+    time_days = as.numeric(time_days)
+  )
+
+stopifnot(all(!is.na(dd_det$time_days)),
+          all(dd_det$event01 %in% c(0L,1L)))
+
+# ---- 1) Normalize Gender labels & set reference (Male)
+# Edit mappings below if your labels differ.
+dd_det <- dd_det %>%
+  mutate(
+    Gender = case_when(
+      Gender %in% c("Male","M","male","m",1)   ~ "Male",
+      Gender %in% c("Female","F","female","f") ~ "Female",
+      TRUE ~ as.character(Gender)
+    ),
+    Gender = factor(Gender, levels = c("Male","Female"))
+  )
+
+# Optional: drop rows with unknown/other Gender values
+dd_det <- dd_det %>% filter(!is.na(Gender))
+
+# ---- 2) Cox proportional hazards model (Female vs Male)
+fit_gender <- coxph(Surv(time_days, event01) ~ Gender, data = dd_det)
+s_gender   <- summary(fit_gender)
+print(s_gender)
+
+# ---- 3) Tidy HR table + CSV export
+hr_gender <- data.frame(
+  term     = rownames(s_gender$coef),
+  HR       = s_gender$coef[, "exp(coef)"],
+  CI_lower = s_gender$conf.int[, "lower .95"],
+  CI_upper = s_gender$conf.int[, "upper .95"],
+  p_value  = s_gender$coef[, "Pr(>|z|)"],
+  row.names = NULL, check.names = FALSE
+)
+print(hr_gender)
+write.csv(hr_gender, "HR_Gender.csv", row.names = FALSE)
+
+cat("\nConcordance:",
+    round(s_gender$concordance[1], 3),
+    "(se =", round(s_gender$concordance[2], 3), ")\n")
+
+# ---- 4) PH assumption check
+ph_gender <- cox.zph(fit_gender)
+print(ph_gender)
+# plot(ph_gender)  # uncomment to visually inspect Schoenfeld residuals
+
+# ---- 5) Kaplan–Meier by Gender
+fit_km_gender <- survfit(Surv(time_days, event01) ~ Gender, data = dd_det)
+
+# Pretty KM with risk table + log-rank p-value
+km_plot <- ggsurvplot(
+  fit_km_gender,
+  data         = dd_det,
+  pval         = TRUE,
+  risk.table   = TRUE,
+  conf.int     = TRUE,
+  xlab         = "Time (days)",
+  ylab         = "Overall survival probability",
+  legend.title = "Gender",
+  legend.labs  = levels(dd_det$Gender),
+  risk.table.height = 0.25
+)
+
+# ---- 6) Save plots to files
+# Save main KM curve
+try({
+  ggplot2::ggsave("KM_Gender_plot.png", km_plot$plot, width = 8, height = 5, dpi = 300)
+}, silent = TRUE)
+
+# Save risk table (as a ggplot object)
+try({
+  ggplot2::ggsave("KM_Gender_risktable.png", km_plot$table, width = 8, height = 2.5, dpi = 300)
+}, silent = TRUE)
+
+# Some setups prefer saving the combined object via print()
+# If you need a single image containing both, try this:
+# png("KM_Gender_combined.png", width = 1200, height = 800, res = 150)
+# print(km_plot)
+# dev.off()
+
+# ---- 7) Median survival table (days) per Gender + CSV export
+sf   <- summary(fit_km_gender)$table  # matrix with rows like "Gender=Male"
+labs <- rownames(sf)
+grp  <- sub("^.*=", "", labs)         # keep "Male"/"Female"
+n_per <- as.integer(table(dd_det$Gender)[grp])
+
+med_gender <- data.frame(
+  group       = grp,
+  n           = n_per,
+  median_days = sf[, "median"],
+  lower_95    = sf[, "0.95LCL"],
+  upper_95    = sf[, "0.95UCL"],
+  row.names   = NULL, check.names = FALSE
+)
+
+print(med_gender)
+write.csv(med_gender, "KM_Gender_MEDIANS_DAYS.csv", row.names = FALSE)
+
+# ==============================
+# OPTIONAL: Adjusted model example
+# (uncomment & adapt covariates you have, e.g., Stage, Age, Smoking)
+# dd_det$Stage <- factor(dd_det$Stage, levels = c("I","II","III","IV"))
+# fit_gender_adj <- coxph(Surv(time_days, event01) ~ Gender + Stage + Age + Smoking, data = dd_det)
+# summary(fit_gender_adj)
+# cox.zph(fit_gender_adj)
+# ==============================
+
+cat("\nFiles written:\n",
+    "- HR_Gender.csv\n",
+    "- KM_Gender_plot.png\n",
+    "- KM_Gender_risktable.png\n",
+    "- KM_Gender_MEDIANS_DAYS.csv\n")
