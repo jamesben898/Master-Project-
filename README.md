@@ -2664,3 +2664,88 @@ cat("\nFiles written:\n",
     "- KM_Gender_plot.png\n",
     "- KM_Gender_risktable.png\n",
     "- KM_Gender_MEDIANS_DAYS.csv\n")
+
+
+    # =========================================================
+> # MULTIVARIATE COX PROPORTIONAL HAZARDS MODEL (OS in DAYS)
+> # =========================================================
+> 
+> library(survival)
+> 
+> # --- Make sure base survival data is ready ---
+> d <- md
+> time_col  <- if ("time_os_days" %in% names(d)) "time_os_days" else "survival_days"
+> event_col <- if ("event_os"     %in% names(d)) "event_os"     else "VitalStatus"
+> 
+> # Prepare time/event
+> d$time_days <- suppressWarnings(as.numeric(d[[time_col]]))
+> evt_raw <- tolower(trimws(as.character(d[[event_col]])))
+> d$event01 <- ifelse(evt_raw %in% c("1","2","yes","true","dead","deceased","died","event"), 1L,
++                     ifelse(evt_raw %in% c("0","no","false","alive","living","censored"), 0L, NA_integer_))
+> d_os <- subset(d, !is.na(time_days) & time_days >= 0 & event01 %in% c(0L,1L))
+> 
+> # --- CLEAN VARIABLES (match univariate prep) ---
+> 
+> # Smoking
+> d_os$smoking2 <- factor(trimws(as.character(d_os$smoking)), levels = c("Never","Ever"))
+> 
+> # Gender
+> graw <- tolower(trimws(as.character(d_os$Gender)))
+> Gender2 <- ifelse(graw %in% c("female","f","woman","women","0"), "Female",
++                   ifelse(graw %in% c("male","m","man","men","1"), "Male", NA_character_))
+> d_os$Gender2 <- factor(Gender2, levels = c("Female","Male"))
+> 
+> # Cluster
+> d_os$Cluster <- droplevels(factor(d_os$Cluster))
+> 
+> # Histology
+> hist_raw <- trimws(as.character(d_os$Histology))
+> hist_raw <- ifelse(hist_raw %in% c("Adeno","Adenocarcinoma"), "Adenocarcinoma",
++                    ifelse(hist_raw %in% c("Squamous","Squamous cell carcinoma","SCC"), "Squamous",
++                           ifelse(hist_raw %in% c("Large cell","Large cell carcinoma"), "Large cell",
++                                  hist_raw)))
+> d_os$Histology2 <- factor(hist_raw)
+> 
+> # StageStat (I–IV)
+> lvl_stat <- intersect(c("I","II","III","IV"), unique(as.character(d_os$stage_stat)))
+> d_os$stage_stat <- factor(d_os$stage_stat, levels = lvl_stat, ordered = TRUE)
+> 
+> # --- Keep only complete cases for all variables ---
+> vars <- c("time_days","event01","smoking2","Gender2","Cluster","Histology2","stage_stat")
+> dd_multi <- d_os[complete.cases(d_os[, vars]), vars]
+> 
+> # --- FIT MULTIVARIATE COX MODEL ---
+> cox_multi <- coxph(Surv(time_days, event01) ~ 
++                        smoking2 + Gender2 + Cluster + Histology2 + stage_stat,
++                    data = dd_multi)
+> s_multi <- summary(cox_multi)
+> print(s_multi)
+> 
+> # --- EXPORT HR TABLE ---
+> hr_multi <- data.frame(
++     term     = rownames(s_multi$coef),
++     HR       = s_multi$coef[, "exp(coef)"],
++     CI_lower = s_multi$conf.int[, "lower .95"],
++     CI_upper = s_multi$conf.int[, "upper .95"],
++     p_value  = s_multi$coef[, "Pr(>|z|)"],
++     row.names = NULL,
++     check.names = FALSE
++ )
+> write.csv(hr_multi, "HR_Multivariate_Cox_DAYS.csv", row.names = FALSE)
+> hr_multi
+
+> # --- OPTIONAL: global model stats ---
+> cat("\nLikelihood ratio test p-value:", signif(s_multi$logtest["pvalue"],3), "\n")
+
+Likelihood ratio test p-value: 0.00195 
+> cat("Wald test p-value:", signif(s_multi$waldtest["pvalue"],3), "\n") 
+> cat("Score (logrank) test p-value:", signif(s_multi$sctest["pvalue"],3), "\n") 
+> 
+> # --- Optional: check proportional hazards assumption ---
+> ph_test <- cox.zph(cox_multi)
+> print(ph_test)
+ 
+> png("PH_Assumption_Multivariate.png", width=1600, height=1200, res=200)
+> plot(ph_test)
+> dev.off()
+
