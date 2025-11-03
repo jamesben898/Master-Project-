@@ -2782,3 +2782,23 @@ cox_df <- as.data.frame(t(cox_results)) %>%
 sig_surv_genes <- cox_df %>% filter(padj < 0.05)
 
 write.csv(sig_surv_genes, "prognostic_biomarkers.csv", row.names = FALSE)
+
+library(caret)
+library(randomForest)
+
+# Build a training dataset
+train_data <- t(vsd_expression_matrix[rownames(vsd_expression_matrix) %in% sig_DEGs$gene_id, ])
+train_data <- as.data.frame(train_data)
+train_data$Cluster <- factor(md$Cluster)
+
+# Train a Random Forest model
+set.seed(123)
+rf_model <- randomForest(Cluster ~ ., data = train_data, importance = TRUE)
+
+# Rank genes by importance
+rf_importance <- as.data.frame(importance(rf_model))
+rf_importance$gene <- rownames(rf_importance)
+rf_importance <- rf_importance[order(-rf_importance$MeanDecreaseGini), ]
+
+write.csv(rf_importance, "diagnostic_biomarkers_RF_importance.csv", row.names = FALSE)
+
