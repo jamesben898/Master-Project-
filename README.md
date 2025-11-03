@@ -2749,3 +2749,36 @@ Likelihood ratio test p-value: 0.00195
 > plot(ph_test)
 > dev.off()
 
+library(survival)
+library(dplyr)
+
+# Ensure survival variables are numeric
+md$survival_days <- as.numeric(md$survival_days)
+md$VitalStatus <- as.numeric(md$VitalStatus)  # 1=dead, 0=alive
+
+# Create the survival object
+surv_obj <- Surv(time = md$survival_days, event = md$VitalStatus)
+
+# Subset expression matrix to significant genes
+expr_surv <- vsd_expression_matrix[rownames(vsd_expression_matrix) %in% sig_DEGs$gene_id, ]
+
+# Run Cox regression per gene
+cox_results <- apply(expr_surv, 1, function(gene_expr) {
+  tryCatch({
+    model <- coxph(surv_obj ~ gene_expr)
+    c(pval = summary(model)$coefficients[,"Pr(>|z|)"],
+      HR = exp(coef(model)))
+  }, error = function(e) c(pval = NA, HR = NA))
+})
+
+# Format results
+cox_df <- as.data.frame(t(cox_results)) %>%
+  mutate(across(everything(), as.numeric),
+         gene = rownames(.),
+         padj = p.adjust(pval, method = "fdr")) %>%
+  arrange(padj)
+
+# Keep significant survival genes
+sig_surv_genes <- cox_df %>% filter(padj < 0.05)
+
+write.csv(sig_surv_genes, "prognostic_biomarkers.csv", row.names = FALSE)
