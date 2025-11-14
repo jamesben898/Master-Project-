@@ -376,6 +376,66 @@ nano run_tximport.slurm
 #SBATCH --mail-user=james.bencsik@uleth.ca
 #SBATCH --mail-type=END,FAIL
 
+
+#!/bin/bash
+#SBATCH --job-name=salmon_quant
+#SBATCH --output=/scratch/james89/logs/salmon_%A.out
+#SBATCH --error=/scratch/james89/logs/salmon_%A.err
+#SBATCH --time=04:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
+#SBATCH --mail-user=james.bencsik@uleth.ca
+#SBATCH --mail-type=END,FAIL
+
+# -------------------------------
+# 🧬 Load required modules
+# -------------------------------
+module load StdEnv/2020
+module load salmon/1.10.0
+
+# -------------------------------
+# 🧬 Define directories
+# -------------------------------
+REF_FASTA="/scratch/james89/gencode.v44.transcripts.fa"
+REF_GTF="/scratch/james89/gencode.v44.annotation.gtf"
+INDEX_DIR="/scratch/james89/salmon_index"
+QUANT_DIR="/scratch/james89/salmon_quant"
+FASTQ_DIR="/scratch/james89"
+
+mkdir -p "$INDEX_DIR" "$QUANT_DIR"
+
+# -------------------------------
+# 🧩 Step 1: Build the Salmon index
+# -------------------------------
+echo "Building Salmon index..."
+salmon index \
+  -t "$REF_FASTA" \
+  -i "$INDEX_DIR" \
+  -k 31 \
+  --keepDuplicates
+echo "Index built successfully."
+
+# -------------------------------
+# 🧬 Step 2: Quantify each sample (SINGLE-END)
+# -------------------------------
+echo "Starting Salmon quantification..."
+
+for fq in ${FASTQ_DIR}/*.fastq; do
+  sample=$(basename "$fq" .fastq)
+  echo "Quantifying sample: $sample"
+
+  salmon quant \
+    -i "$INDEX_DIR" \
+    -l A \
+    -r "$fq" \
+    -p 8 \
+    --gcBias \
+    --validateMappings \
+    -o "${QUANT_DIR}/${sample}"
+done
+
+echo "All single-end samples quantified successfully."
+
 # Load required modules
 module load StdEnv/2020
 module load r/4.2.2
