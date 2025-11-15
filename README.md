@@ -1167,6 +1167,21 @@ Heatmap(
   heatmap_legend_param = list(title = "Consensus", at = c(0, 0.5, 1))
 )
 dev.off()
+# Step 1: Extract cluster assignments from ConsensusClusterPlus
+cluster_vector <- results[[4]]$consensusClass
+
+# Step 2: Turn into a dataframe with sample IDs
+cluster_df <- data.frame(
+  sampleID = names(cluster_vector),
+  Cluster = as.factor(cluster_vector)
+)
+
+# Step 3: Merge your cleaned metadata with cluster assignment
+merged_metadata <- merged_meta_clean %>%
+  left_join(cluster_df, by = "sampleID")
+
+# Step 4: Save as metadataclu (your naming)
+metadataclu <- merged_metadata
 
 
 # Assume md is already read in as metadataclu
