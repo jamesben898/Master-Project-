@@ -984,66 +984,190 @@ print(icl[["clusterConsensus"]])
 print(icl[["itemConsensus"]][1:5,])  # Show the first 5 item-consensus values
 
 # ------------------------------------------------------------------#
+Prerequisites
 
-Step 1: Load libraries
+Install & load packages:
 
-library(DESeq2)
-library(matrixStats)
+# Install (run once)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install(c(
+  "ConsensusClusterPlus", "ComplexHeatmap", "circlize",
+  "cluster", "factoextra"
+))
+install.packages(c("tidyverse", "RColorBrewer", "reshape2", "vcd"))
+
+# Load libraries
+library(tidyverse)
 library(ConsensusClusterPlus)
+library(ComplexHeatmap)
+library(circlize)
+library(cluster)
+library(factoextra)
+library(RColorBrewer)
 
-Step 2: Extract top 2000 most variable genes
+🧩 1. Load input data
+# Load normalized & variance-stabilized expression matrix
+expr <- read.csv("expression_matrix_norm_vsd.csv", header = TRUE)
+metadata <- read.csv("sample_metadata.csv", header = TRUE)
 
-Get variance-stabilized expression matrix
-vsd_matrix <- assay(vsd) # Rows = genes, columns = samples
+# Ensure proper row/column format
+expr <- column_to_rownames(expr, var = "Gene")
+expr <- expr[ , metadata$SampleID ]   # enforce sample order
 
-Calculate variance per gene
-gene_variances <- rowVars(vsd_matrix)
+🔬 2. Feature selection (top 1000 variable genes)
+# Compute median absolute deviation (MAD) per gene
+disp <- apply(expr, 1, mad)
+ranked <- expr[order(disp, decreasing = TRUE), ]
+expr1000 <- as.matrix(ranked[1:1000, ])
 
-Get top 2000 most variable genes
-top_genes <- order(gene_variances, decreasing = TRUE)[1:2000]
-vsd_top2000 <- vsd_matrix[top_genes, ]
+🧮 3. Run ConsensusClusterPlus
+set.seed(42)
+cutoffs <- c(500, 1000, 2000, 3000, 5000)
 
-Step 3: Prepare matrix for clustering
-
-Transpose so that rows = samples, columns = genes
-expr_for_clustering <- t(vsd_top2000)
-
-Confirm shape: should be (samples x 2000 genes)
-dim(expr_for_clustering)
-head(rownames(expr_for_clustering)) # Should be like "2224", "2242", etc.
-
-Step 4: Run ConsensusClusterPlus (K = 2 to 6)
-set.seed(1234)
-
-results <- ConsensusClusterPlus(
-d = expr_for_clustering,
-maxK = 6,
-reps = 1000,
-pItem = 0.8,
-pFeature = 1,
-clusterAlg = "hc",
-distance = "pearson",
-seed = 1234,
-plot = "png",
-title = "Clustering_top2000_genes"
+# Example run (top 1000 genes)
+cc <- ConsensusClusterPlus(
+  as.matrix(ranked[1:1000, ]),
+  maxK = 15,
+  reps = 1000,
+  pItem = 0.8,
+  pFeature = 1,
+  clusterAlg = "hc",
+  distance = "pearson",
+  seed = 42,
+  plot = "png",
+  title = "CC_plots_top1000"
 )
 
-Step 5: Choose K (You chose K = 3)
+save(cc, file = "CC_top1000.RData")
 
-Examine consensus matrices, CDF, delta area
-Then settle on K = 3
-Step 6: Extract cluster assignments
-cluster_assignments <- results[[3]]$consensusClass # K = 3
+📈 4. Calculate PAC and choose optimal K
+lower <- 0.10
+upper <- 0.90
 
-merged_meta_clean$Cluster <- as.factor(cluster_assignments)
-Error in $<-.data.frame(*tmp*, Cluster, value = c(ENSG00000186081 = 1L, :
-replacement has 2000 rows, data has 258
+pac_one <- function(consmat, lo = lower, hi = upper) {
+  v <- consmat[upper.tri(consmat, diag = FALSE)]
+  mean(v > lo & v < hi)
+}
 
-stopifnot(all(names(cluster_assignments) == rownames(merged_meta_clean)))
-Error: all(names(cluster_assignments) == rownames(merged_meta_clean)) is not TRUE
-In addition: Warning message:
-In names(cluster_assignments) == rownames(merged_meta_clean) :
-longer object length is not a multiple of shorter object length
+Ks <- 2:length(cc)
+PAC <- sapply(Ks, function(k) pac_one(cc[[k]]$consensusMatrix))
+pac_df <- data.frame(K = Ks, PAC = PAC)
+write.csv(pac_df, "PAC_results_top1000.csv", row.names = FALSE)
+
+⚙️ 5. Test various algorithm/distance combinations
+algs <- c("hc", "hc", "hc", "km", "pam")
+dists <- c("pearson", "spearman", "euclidean", "euclidean", "pearson")
+labels <- LETTERS[1:length(algs)]
+
+results <- vector("list", length(algs))
+names(results) <- labels
+
+for (i in seq_along(algs)) {
+  cat("Running", labels[i], algs[i], dists[i], "...\n")
+  mat <- if (dists[i] == "euclidean") t(scale(t(expr1000))) else expr1000
+  results[[i]] <- ConsensusClusterPlus(
+    as.matrix(mat),
+    maxK = 7,
+    reps = 1000,
+    pItem = 0.8,
+    pFeature = 1,
+    clusterAlg = algs[i],
+    distance = dists[i],
+    seed = 42,
+    plot = NULL
+  )
+}
+
+PAC <- function(M, lo = 0.10, hi = 0.90) {
+  F <- ecdf(M[upper.tri(M)])
+  F(hi) - F(lo)
+}
+
+score_tbl <- do.call(rbind, lapply(labels, \(lab) {
+  pac <- sapply(results[[lab]][2:5], \(x) PAC(x$consensusMatrix))
+  data.frame(Method = lab, K = 2:5, PAC = pac)
+}))
+write.csv(score_tbl, "PAC_grid_test.csv", row.names = FALSE)
+
+🧭 6. Extract final cluster labels (K = 4)
+cc_final <- cc  # rename for clarity
+clusters <- cc_final[[4]]$consensusClass
+
+write_tsv(
+  tibble(SampleID = names(clusters), Cluster = clusters),
+  "Subtypes_K4.tsv"
+)
+
+🧩 7. Stability diagnostics (Silhouette)
+expr_sel <- expr1000
+diss_spear <- as.dist(1 - cor(expr_sel, method = "spearman"))
+sil_sp <- silhouette(clusters, diss_spear)
+
+png("silhouette_K4_spearman.png", 1600, 900, res = 180)
+fviz_silhouette(
+  sil_sp,
+  palette = brewer.pal(4, "Set2"),
+  label = FALSE,
+  print.summary = TRUE
+) +
+  labs(title = "Silhouette (K = 4, Spearman distance)")
+dev.off()
+
+🧬 8. Integrate clusters with metadata
+metadata_aug <- metadata %>%
+  left_join(read_csv("histology_lookup.csv"), by = "Histology") %>%
+  mutate(Cluster = clusters[SampleID])
+
+# Chi-square test: Cluster × Histology
+hist_tab <- table(metadata_aug$Cluster, metadata_aug$Histology_abbr)
+hist_chi <- chisq.test(hist_tab)
+cramersV <- sqrt(hist_chi$statistic /
+                   (sum(hist_tab) * (min(dim(hist_tab)) - 1)))
+cat("Cramer’s V =", cramersV, "\n")
+
+# Plot stacked bars
+ggplot(metadata_aug, aes(factor(Cluster), fill = Histology_abbr)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    x = "Cluster (K = 4)",
+    y = "% of samples",
+    title = "Histology distribution across clusters"
+  ) +
+  theme_bw()
+
+🔥 9. Create consensus heatmap (for publication)
+M <- cc_final[[4]]$consensusMatrix
+rownames(M) <- colnames(M) <- names(clusters)
+
+ha <- HeatmapAnnotation(
+  Cluster = factor(clusters),
+  Histology = metadata_aug$Histology_abbr,
+  Stage = metadata_aug$Stage,
+  col = list(
+    Cluster = setNames(brewer.pal(4, "Set2"), 1:4),
+    Histology = brewer.pal(length(unique(metadata_aug$Histology_abbr)), "Paired"),
+    Stage = brewer.pal(length(unique(metadata_aug$Stage)), "Blues")
+  )
+)
+
+png("ConsensusMatrix_K4_Annotated.png", 1800, 1500, res = 200)
+Heatmap(
+  M,
+  name = "Consensus Index",
+  show_row_names = FALSE,
+  show_column_names = FALSE,
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  top_annotation = ha,
+  col = colorRamp2(c(0, 0.5, 1), c("navy", "white", "firebrick")),
+  heatmap_legend_param = list(title = "Consensus", at = c(0, 0.5, 1))
+)
+dev.off()
+
 
 # Assume md is already read in as metadataclu
 > md <- metadataclu
