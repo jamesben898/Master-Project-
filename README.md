@@ -717,7 +717,8 @@ Run DESeq2 for Normalization & Variance Stabilization
 
 dds <- DESeq(dds)
 vsd <- vst(dds, blind=FALSE)  # Variance stabilizing transformation
-
+vsd_expression_matrix <- assay(vsd)       # Extract normalized matrix
+write.csv(vsd_expression_matrix, "vsd_expression_matrix.csv")  # Save for reuse
 # View the top significant genes
 head(res)
 
