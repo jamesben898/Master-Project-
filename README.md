@@ -1302,105 +1302,124 @@ fitting model and testing
 -- original counts are preserved in counts(dds)
 estimating dispersions
 fitting model and testing
-> # --- 3) Helper to run & save a contrast -----------------------------------
-> do_contrast <- function(dds, level_ref, outdir) {
-+     # 4 vs level_ref (log2FC = Cluster4 - Cluster[level_ref])
-+     res_raw <- results(dds, contrast = c("Cluster","4", level_ref))
-+     
-+     # Shrink LFCs (apeglm if available else normal)
-+     res_shrunk <- tryCatch({
-+         suppressPackageStartupMessages(require(apeglm))
-+         lfcShrink(dds, contrast = c("Cluster","4", level_ref), type = "apeglm")
-+     }, error = function(e) {
-+         message("apeglm not available; using 'normal' shrink for 4 vs ", level_ref)
-+         lfcShrink(dds, contrast = c("Cluster","4", level_ref), type = "normal")
-+     })
-+     
-+     tbl <- as.data.frame(res_shrunk) |>
-+         mutate(gene_id = rownames(res_shrunk)) |>
-+         relocate(gene_id) |>
-+         arrange(padj, pvalue)
-+     
-+     dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
-+     write_csv(tbl, file.path(outdir, paste0("DESeq2_Cluster4_vs_", level_ref, ".csv")))
-+     saveRDS(res_raw,    file.path(outdir, paste0("res_raw_4vs", level_ref, ".rds")))
-+     saveRDS(res_shrunk, file.path(outdir, paste0("res_shrunk_4vs", level_ref, ".rds")))
-+     
-+     cat(sprintf("\n4 vs %s: %d genes padj<0.05\n",
-+                 level_ref, sum(tbl$padj < 0.05, na.rm = TRUE)))
-+     invisible(tbl)
-+ }
-> 
-> # --- 4) Run all pairwise: 4 vs 1, 4 vs 2, 4 vs 3 ---------------------------
-> others <- intersect(c("1","2","3"), levels(colData(dds)$Cluster))
-> out_dir <- "~/DE_Pairwise_Cluster4"
-> pairwise_tables <- lapply(others, function(lvl) do_contrast(dds, lvl, out_dir))
-apeglm not available; using 'normal' shrink for 4 vs 1
-using 'normal' for LFC shrinkage, the Normal prior from Love et al (2014).
 
-Note that type='apeglm' and type='ashr' have shown to have less bias than type='normal'.
-See ?lfcShrink for more details on shrinkage type, and the DESeq2 vignette.
-Reference: https://doi.org/10.1093/bioinformatics/bty895
-                                                  
-4 vs 1: 16220 genes padj<0.05
-apeglm not available; using 'normal' shrink for 4 vs 2
-using 'normal' for LFC shrinkage, the Normal prior from Love et al (2014).
 
-Note that type='apeglm' and type='ashr' have shown to have less bias than type='normal'.
-See ?lfcShrink for more details on shrinkage type, and the DESeq2 vignette.
-Reference: https://doi.org/10.1093/bioinformatics/bty895
-                                                  
-4 vs 2: 8315 genes padj<0.05
-apeglm not available; using 'normal' shrink for 4 vs 3
-using 'normal' for LFC shrinkage, the Normal prior from Love et al (2014).
+>## ============================================
+## 0. Load packages
+## ============================================
+library(DESeq2)
+library(apeglm)
+library(readr)
+library(dplyr)
 
-Note that type='apeglm' and type='ashr' have shown to have less bias than type='normal'.
-See ?lfcShrink for more details on shrinkage type, and the DESeq2 vignette.
-Reference: https://doi.org/10.1093/bioinformatics/bty895
-                                                  
-4 vs 3: 19333 genes padj<0.05
-Warning messages:
-1: In library(package, lib.loc = lib.loc, character.only = TRUE, logical.return = TRUE,  :
-  there is no package called ‘apeglm’
-2: In library(package, lib.loc = lib.loc, character.only = TRUE, logical.return = TRUE,  :
-  there is no package called ‘apeglm’
-3: In library(package, lib.loc = lib.loc, character.only = TRUE, logical.return = TRUE,  :
-  there is no package called ‘apeglm’
-> 
-> # Also save the DDS for later reuse
-> saveRDS(dds, file.path(out_dir, "dds_pairwise.rds"))
-> 
-> # Quick peek at top hits for 4 vs 1
-> if ("1" %in% others) head(pairwise_tables[[which(others=="1")]])
-                              gene_id baseMean
-ENSG00000133958.14 ENSG00000133958.14 119.8008
-ENSG00000144406.19 ENSG00000144406.19 289.8305
-ENSG00000186487.21 ENSG00000186487.21 618.6737
-ENSG00000077279.21 ENSG00000077279.21  82.3496
-ENSG00000255087.6   ENSG00000255087.6  96.9727
-ENSG00000166573.6   ENSG00000166573.6 311.9324
-                   log2FoldChange     lfcSE
-ENSG00000133958.14       4.650866 0.1467589
-ENSG00000144406.19       3.420675 0.1129577
-ENSG00000186487.21       3.956863 0.1323279
-ENSG00000077279.21       7.504745 0.2714818
-ENSG00000255087.6        5.198584 0.2084436
-ENSG00000166573.6        6.811142 0.2778687
-                       stat        pvalue
-ENSG00000133958.14 31.66685 4.445422e-220
-ENSG00000144406.19 30.27163 2.709652e-201
-ENSG00000186487.21 29.90851 1.525217e-196
-ENSG00000077279.21 27.55220 4.165250e-167
-ENSG00000255087.6  24.97772 1.067681e-137
-ENSG00000166573.6  24.39656 1.860166e-131
-                            padj
-ENSG00000133958.14 1.727891e-215
-ENSG00000144406.19 5.266073e-197
-ENSG00000186487.21 1.976122e-192
-ENSG00000077279.21 4.047478e-163
-ENSG00000255087.6  8.299937e-134
-ENSG00000166573.6  1.205047e-127
->
+## ============================================
+## 1. Make sure Cluster is a factor
+## ============================================
+colData(dds)$Cluster <- droplevels(factor(colData(dds)$Cluster))
+levels(colData(dds)$Cluster)
+table(colData(dds)$Cluster)
+
+## (Global DESeq on full dds is not strictly required for the pairwise
+## apeglm approach below, because each pair is re-fitted separately.)
+
+## ============================================
+## 2. Helper: run one pairwise comparison with apeglm
+##    log2FC = lvl_A - lvl_B
+## ============================================
+
+run_pair_apeglm <- function(dds, lvl_A, lvl_B, outdir) {
+  message("=== Cluster ", lvl_A, " vs Cluster ", lvl_B, " (apeglm) ===")
+  
+  # ---- subset to samples in these two clusters ----
+  keep <- colData(dds)$Cluster %in% c(lvl_A, lvl_B)
+  dds_pair <- dds[, keep]
+  
+  # Relevel Cluster so lvl_B is reference, lvl_A is comparison
+  colData(dds_pair)$Cluster <- droplevels(
+    factor(colData(dds_pair)$Cluster, levels = c(lvl_B, lvl_A))
+  )
+  
+  design(dds_pair) <- ~ Cluster
+  
+  # Fit the model for this 2-group comparison
+  dds_pair <- DESeq(dds_pair)
+  
+  # Check coefficient names
+  rn <- resultsNames(dds_pair)
+  print(rn)
+  # Typically: c("Intercept", "Cluster_lvlA_vs_lvlB")
+  
+  # Find the Cluster coefficient index (second entry)
+  coef_id <- which(rn != "Intercept")[1]
+  
+  # Raw results for this coefficient
+  res_raw <- results(dds_pair, name = rn[coef_id])
+  
+  # Shrink with apeglm (MUST use coef=, not contrast=)
+  res_shrunk <- lfcShrink(
+    dds_pair,
+    coef = coef_id,
+    type = "apeglm"
+  )
+  
+  # Tidy into a data.frame
+  tbl <- as.data.frame(res_shrunk) %>%
+    mutate(gene_id = rownames(res_shrunk)) %>%
+    relocate(gene_id) %>%
+    arrange(padj, pvalue)
+  
+  # Create output dir
+  dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+  
+  tag      <- paste0("Cluster", lvl_A, "_vs_Cluster", lvl_B, "_apeglm")
+  csv_path <- file.path(outdir, paste0("DESeq2_", tag, ".csv"))
+  rds_raw  <- file.path(outdir, paste0("res_raw_",   tag, ".rds"))
+  rds_shr  <- file.path(outdir, paste0("res_shrunk_",tag, ".rds"))
+  
+  write_csv(tbl, csv_path)
+  saveRDS(res_raw,  rds_raw)
+  saveRDS(res_shrunk, rds_shr)
+  
+  sig_n <- sum(tbl$padj < 0.05, na.rm = TRUE)
+  message("  -> ", sig_n, " genes padj < 0.05")
+  message("  -> wrote: ", csv_path)
+  
+  invisible(tbl)
+}
+
+## ============================================
+## 3. Run ALL pairwise cluster comparisons
+## ============================================
+
+# Get the cluster levels actually present
+cl_levels <- levels(colData(dds)$Cluster)
+cl_levels <- as.character(cl_levels)   # just to be safe
+
+# all unordered pairs (1–2, 1–3, 1–4, 2–3, 2–4, 3–4)
+pairs_mat <- t(combn(cl_levels, 2))
+
+out_dir_all <- "~/DE_AllPairs_Clusters_apeglm"
+
+pairwise_results <- apply(pairs_mat, 1, function(x) {
+  lvl_A <- x[1]
+  lvl_B <- x[2]
+  run_pair_apeglm(dds, lvl_A, lvl_B, out_dir_all)
+})
+
+# name the list entries nicely
+names(pairwise_results) <- apply(pairs_mat, 1, function(x) {
+  paste0("Cluster", x[1], "_vs_Cluster", x[2])
+})
+
+## ============================================
+## 4. Example: peek at a specific comparison
+## ============================================
+
+# e.g. first few genes for Cluster 2 vs 3
+if ("Cluster2_vs_Cluster3" %in% names(pairwise_results)) {
+  head(pairwise_results[["Cluster2_vs_Cluster3"]], 10)
+}
+
 library(survival)
 > 
 > # Start from your metadata df 'md'
