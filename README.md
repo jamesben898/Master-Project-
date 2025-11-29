@@ -2889,4 +2889,28 @@ write_csv(
   data.frame(gene_id = diagnostic_genes),
   file.path(out_root, paste0("RF_Diagnostic_Top", topN, "Genes.csv"))
 )
-+           
++
+library(dplyr)
+library(readr)
+
+# prognostic_genes: significant OS genes (padj < 0.05) from Cox
+# diag_importance: variable importance table from RF (has gene_id + MeanDecreaseAccuracy)
+
+# Keep key survival columns and join with RF importance
+prog_diag_overlap <- prognostic_genes %>%
+  select(gene_id, beta, HR, HR_lower95, HR_upper95, pval, padj) %>% 
+  inner_join(
+    diag_importance %>% select(gene_id, MeanDecreaseAccuracy),
+    by = "gene_id"
+  ) %>%
+  arrange(padj)   # strongest survival signal first
+
+nrow(prog_diag_overlap)     # how many “double hit” genes?
+head(prog_diag_overlap)
+
+# Save the master table of "prognostic + diagnostic" biomarkers
+write_csv(
+  prog_diag_overlap,
+  "/Users/junuhbencsik/Biomarkers_K4Clusters/Prognostic_Diagnostic_overlap.csv"
+)
+       
