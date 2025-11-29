@@ -2655,56 +2655,144 @@ Likelihood ratio test p-value: 0.00195
 > plot(ph_test)
 > dev.off()
 
-library(survival)
-library(dplyr)
-
-# Ensure survival variables are numeric
-md$survival_days <- as.numeric(md$survival_days)
-md$VitalStatus <- as.numeric(md$VitalStatus)  # 1=dead, 0=alive
-
-# Create the survival object
-surv_obj <- Surv(time = md$survival_days, event = md$VitalStatus)
-
-# Subset expression matrix to significant genes
-expr_surv <- vsd_expression_matrix[rownames(vsd_expression_matrix) %in% sig_DEGs$gene_id, ]
-
-# Run Cox regression per gene
-cox_results <- apply(expr_surv, 1, function(gene_expr) {
-  tryCatch({
-    model <- coxph(surv_obj ~ gene_expr)
-    c(pval = summary(model)$coefficients[,"Pr(>|z|)"],
-      HR = exp(coef(model)))
-  }, error = function(e) c(pval = NA, HR = NA))
+## ============================
+## 0) Setup
+## ============================
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(readr)
+  library(stringr)
+  library(purrr)
+  library(survival)
+  library(randomForest)
 })
 
-# Format results
-cox_df <- as.data.frame(t(cox_results)) %>%
-  mutate(across(everything(), as.numeric),
-         gene = rownames(.),
-         padj = p.adjust(pval, method = "fdr")) %>%
+# --- Paths ---
+deg_dir  <- "/Users/junuhbencsik/DE_AllPairs_Clusters_apeglm"
+out_root <- "/Users/junuhbencsik/Biomarkers_K4Clusters"
+dir.create(out_root, showWarnings = FALSE, recursive = TRUE)
+
+# --- Check that key objects exist ---
+stopifnot(
+  exists("vsd_expression_matrix"),
+  exists("md")
+)
+
+# Make sure sample IDs line up
+stopifnot(all(colnames(vsd_expression_matrix) %in% rownames(md)))
+
+## ============================
+## 1) DEG universe from all cluster–cluster contrasts
+## ============================
+
+# Files like: DESeq2_Cluster1_vs_Cluster2_apeglm.csv etc.
+deg_files <- list.files(
+  deg_dir,
+  pattern = "^DESeq2_Cluster[0-9]_vs_Cluster[0-9]_apeglm\\.csv$",
+  full.names = TRUE
+)
+deg_files
+
+if (length(deg_files) != 6L) {
+  warning("Expected 6 DESeq2 pairwise files – found ", length(deg_files))
+}
+
+deg_list <- lapply(deg_files, function(f) {
+  df <- read_csv(f, show_col_types = FALSE)
+  contrast <- basename(f) |>
+    str_remove("^DESeq2_") |>
+    str_remove("_apeglm\\.csv$")
+  df %>% mutate(contrast = contrast)
+})
+
+deg_all <- bind_rows(deg_list)
+
+# Significant DEGs (within each contrast) – tweak thresholds if you want
+deg_sig <- deg_all %>%
+  filter(!is.na(padj),
+         padj < 0.05,
+         abs(log2FoldChange) >= 1)
+
+# Unique DEG gene set (universe for biomarker discovery)
+sig_DEGs <- deg_sig %>%
+  distinct(gene_id) %>%
+  filter(gene_id %in% rownames(vsd_expression_matrix))
+
+candidate_genes_all <- sig_DEGs$gene_id
+length(candidate_genes_all)
+
+write_csv(sig_DEGs,
+          file.path(out_root, "Union_significant_DEGs_all_clusters.csv"))
+## =====================================
+## 2) PROGNOSTIC BIOMARKERS (Cox OS)
+## =====================================
+
+# --- Prepare survival info from md (OS in DAYS) ---
+d <- md
+
+time_col  <- if ("time_os_days" %in% names(d)) "time_os_days" else "survival_days"
+event_col <- if ("event_os"     %in% names(d)) "event_os"     else "VitalStatus"
+
+d$time_days <- suppressWarnings(as.numeric(d[[time_col]]))
+
+evt_raw <- tolower(trimws(as.character(d[[event_col]])))
+d$event01 <- ifelse(
+  evt_raw %in% c("1","2","yes","true","dead","deceased","died","event"), 1L,
+  ifelse(evt_raw %in% c("0","no","false","alive","living","censored"), 0L, NA_integer_)
+)
+
+# Keep rows with valid OS info
+d_surv <- subset(d, !is.na(time_days) & time_days >= 0 & event01 %in% c(0L,1L))
+
+# Common samples between expression and metadata
+common_samples <- intersect(colnames(vsd_expression_matrix), rownames(d_surv))
+length(common_samples)
+
+expr_progn <- vsd_expression_matrix[candidate_genes_all, common_samples, drop = FALSE]
+d_surv     <- d_surv[common_samples, , drop = FALSE]
+
+stopifnot(identical(colnames(expr_progn), rownames(d_surv)))
+
+# --- Run univariate Cox per gene ---
+cox_results_list <- lapply(rownames(expr_progn), function(g) {
+  x <- as.numeric(expr_progn[g, ])
+  df <- data.frame(
+    time  = d_surv$time_days,
+    event = d_surv$event01,
+    expr  = x
+  )
+  # Safeguard: if no variation in expr, skip
+  if (sd(df$expr, na.rm = TRUE) == 0) return(NULL)
+  
+  fit <- try(coxph(Surv(time, event) ~ expr, data = df), silent = TRUE)
+  if (inherits(fit, "try-error")) return(NULL)
+  
+  s <- summary(fit)
+  data.frame(
+    gene_id    = g,
+    beta       = s$coeff[1, "coef"],
+    HR         = s$coeff[1, "exp(coef)"],
+    HR_lower95 = s$conf.int[1, "lower .95"],
+    HR_upper95 = s$conf.int[1, "upper .95"],
+    pval       = s$coeff[1, "Pr(>|z|)"],
+    row.names  = NULL,
+    check.names = FALSE
+  )
+})
+
+cox_progn_all <- bind_rows(cox_results_list)
+cox_progn_all$padj <- p.adjust(cox_progn_all$pval, method = "BH")
+
+# Filter prognostic genes (FDR < 0.05)
+prognostic_genes <- cox_progn_all %>%
+  filter(!is.na(padj), padj < 0.05) %>%
   arrange(padj)
 
-# Keep significant survival genes
-sig_surv_genes <- cox_df %>% filter(padj < 0.05)
+nrow(prognostic_genes)
 
-write.csv(sig_surv_genes, "prognostic_biomarkers.csv", row.names = FALSE)
+write_csv(cox_progn_all,
+          file.path(out_root, "Prognostic_all_DEGs_CoxOS.csv"))
+write_csv(prognostic_genes,
+          file.path(out_root, "Prognostic_significant_CoxOS_FDR0.05.csv"))
 
-library(caret)
-library(randomForest)
-
-# Build a training dataset
-train_data <- t(vsd_expression_matrix[rownames(vsd_expression_matrix) %in% sig_DEGs$gene_id, ])
-train_data <- as.data.frame(train_data)
-train_data$Cluster <- factor(md$Cluster)
-
-# Train a Random Forest model
-set.seed(123)
-rf_model <- randomForest(Cluster ~ ., data = train_data, importance = TRUE)
-
-# Rank genes by importance
-rf_importance <- as.data.frame(importance(rf_model))
-rf_importance$gene <- rownames(rf_importance)
-rf_importance <- rf_importance[order(-rf_importance$MeanDecreaseGini), ]
-
-write.csv(rf_importance, "diagnostic_biomarkers_RF_importance.csv", row.names = FALSE)
 
