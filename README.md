@@ -2795,4 +2795,98 @@ write_csv(cox_progn_all,
 write_csv(prognostic_genes,
           file.path(out_root, "Prognostic_significant_CoxOS_FDR0.05.csv"))
 
+did it run 
+library(randomForest)
+> library(dplyr)
+> library(readr)
+> 
+> # ---------------------------------------------------
+> # 0) Align expression with metadata (Cluster)
+> # ---------------------------------------------------
+> md$Cluster <- droplevels(factor(md$Cluster))  # ensure factor 1–4
+> 
+> common_samp <- intersect(colnames(vsd_expression_matrix), rownames(md))
+> length(common_samp)
+[1] 258
+> 
+> expr_diag <- t(vsd_expression_matrix[candidate_genes_all, common_samp, drop = FALSE])
+> expr_diag <- as.data.frame(expr_diag)
+> 
+> # Add outcome
+> expr_diag$Cluster <- md[common_samp, "Cluster"]
+> 
+> # Check dimensions
+> dim(expr_diag)       # n_samples × (n_genes + 1)
+[1]   258 15286
+> table(expr_diag$Cluster)
 
+  1   2   3   4 
+163   9  73  13 
+> 
+> # ---------------------------------------------------
+> # 1) Remove zero-variance genes
+> # ---------------------------------------------------
+> gene_cols <- setdiff(colnames(expr_diag), "Cluster")
+> 
+> var_ok <- sapply(expr_diag[ , gene_cols, drop = FALSE],
++                  function(x) var(x, na.rm = TRUE) > 0)
+> 
+> sum(var_ok)   # how many genes kept
+[1] 15285
+> 
+> expr_diag <- expr_diag[ , c(names(var_ok)[var_ok], "Cluster"), drop = FALSE]
+> dim(expr_diag)
+[1]   258 15286
+> 
+> # ---------------------------------------------------
+> # 2) Random forest model
+> # ---------------------------------------------------
+> set.seed(123)
+> 
+> rf_model <- randomForest(
++     Cluster ~ .,
++     data       = expr_diag,
++     importance = TRUE,
++     ntree      = 1000
++ )
+> 
+> rf_model   # OOB error, confusion matrix, etc.
+
+Call:
+ randomForest(formula = Cluster ~ ., data = expr_diag, importance = TRUE,      ntree = 1000) 
+               Type of random forest: classification
+                     Number of trees: 1000
+No. of variables tried at each split: 123
+
+        OOB estimate of  error rate: 5.43%
+Confusion matrix:
+    1 2  3  4 class.error
+1 162 0  1  0 0.006134969
+2   5 2  2  0 0.777777778
+3   5 0 68  0 0.068493151
+4   0 0  1 12 0.076923077
+> 
+> # ---------------------------------------------------
+> # 3) Variable importance & top N diagnostic genes
+> # ---------------------------------------------------
+> diag_importance <- importance(rf_model, type = 1)
+> diag_importance <- as.data.frame(diag_importance)
+> diag_importance$gene_id <- rownames(diag_importance)
+> 
+> diag_importance <- diag_importance %>%
++     arrange(desc(MeanDecreaseAccuracy))
+> 
+> topN <- 100
+> diagnostic_genes <- diag_importance$gene_id[
++     seq_len(min(topN, nrow(diag_importance)))
++ ]
+> 
+> write_csv(diag_importanceile.path(out_root, "RF_Diagnostic_GeneImportance_AllGenes.csv")
+)
+
+# 2) Save just the top N diagnostic genes
+write_csv(
+  data.frame(gene_id = diagnostic_genes),
+  file.path(out_root, paste0("RF_Diagnostic_Top", topN, "Genes.csv"))
+)
++           
