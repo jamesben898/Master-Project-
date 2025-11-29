@@ -1419,6 +1419,49 @@ names(pairwise_results) <- apply(pairs_mat, 1, function(x) {
 if ("Cluster2_vs_Cluster3" %in% names(pairwise_results)) {
   head(pairwise_results[["Cluster2_vs_Cluster3"]], 10)
 }
+## ---------- 1) Read all apeglm DESeq2 results & get union of DEGs ----------
+
+# Folder where your 6 CSVs live
+deg_dir <- "/Users/junuhbencsik/DE_AllPairs_Clusters_apeglm"
+
+# These should be like:
+# DESeq2_Cluster1_vs_Cluster2_apeglm.csv
+# DESeq2_Cluster1_vs_Cluster3_apeglm.csv
+# ...
+deg_files <- list.files(
+  deg_dir,
+  pattern = "^DESeq2_Cluster[0-9]_vs_Cluster[0-9]_apeglm\\.csv$",
+  full.names = TRUE
+)
+
+deg_files   # quick check you see all 6 files
+
+# Read, add "contrast" column, and stack
+deg_list <- lapply(deg_files, function(f) {
+  df <- read_csv(f, show_col_types = FALSE)
+  contrast <- basename(f) |>
+    str_remove("^DESeq2_") |>
+    str_remove("_apeglm\\.csv$")
+  df %>% mutate(contrast = contrast)
+})
+
+deg_all <- bind_rows(deg_list)
+
+# Significant DEGs in *any* contrast
+deg_sig <- deg_all %>%
+  filter(!is.na(padj),
+         padj < 0.05,
+         abs(log2FoldChange) >= 1)
+
+sig_DEGs <- deg_sig %>%
+  distinct(gene_id)
+
+nrow(sig_DEGs)   # how many unique DE genes?
+
+write_csv(sig_DEGs,
+          file.path(deg_dir, "Union_significant_DEGs_all_clusters.csv"))
+
+Then Next Line OF CODE seeing what are categorial verraibles are doing 
 
 library(survival)
 > 
