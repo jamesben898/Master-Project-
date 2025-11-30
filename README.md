@@ -2930,3 +2930,25 @@ prog_ids <- prognostic_genes$gene_id    # Ensembl IDs with version
 > # This is the vector you’ll use for enrichment:
 > diag_ids <- diagnostic_genes_sig$gene_id
 > length(diag_ids)
+
+
+
+# ✅ prognostic genes (all significant, NOT top 100)
+prognostic_genes <- prognostic_genes  # just to be explicit
+
+nrow(prognostic_genes)   # how many prognostic genes?
+head(prognostic_genes)
+
+# Save to disk for sanity
+write.csv(prognostic_genes,
+          file = file.path(out_root, "Prognostic_significant_CoxOS_FDR0.05.csv"),
+          row.names = FALSE)
+# ✅ diagnostic genes = union of all significant DE genes across cluster contrasts
+diagnostic_genes_sig <- sig_DEGs    # clearer name
+
+nrow(diagnostic_genes_sig)
+head(diagnostic_genes_sig)
+
+write.csv(diagnostic_genes_sig,
+          file = file.path(out_root, "Diagnostic_significant_DE_clusters_union.csv"),
+          row.names = FALSE)
