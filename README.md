@@ -2952,3 +2952,234 @@ head(diagnostic_genes_sig)
 write.csv(diagnostic_genes_sig,
           file = file.path(out_root, "Diagnostic_significant_DE_clusters_union.csv"),
           row.names = FALSE)
+
+## ======================================================================
+## ENRICHMENT ANALYSIS – KEEPING lncRNAs IN THE GAME
+## ======================================================================
+
+# 0) Packages ------------------------------------------------------------
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+for (pkg in c("clusterProfiler", "org.Hs.eg.db", "ReactomePA", "biomaRt")) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    BiocManager::install(pkg, ask = FALSE)
+  }
+}
+
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ReactomePA)
+library(biomaRt)
+library(dplyr)
+library(readr)
+library(tibble)
+library(purrr)
+
+# 1) Output folder for enrichment results --------------------------------
+enrich_dir <- file.path(out_root, "Enrichment_results")
+dir.create(enrich_dir, showWarnings = FALSE, recursive = TRUE)
+
+# 2) Helper: strip Ensembl version ---------------------------------------
+strip_version <- function(x) sub("\\..*$", "", x)
+
+# 3) BACKGROUND universe from *all* genes in vsd_expression_matrix -------
+bg_ens <- unique(strip_version(rownames(vsd_expression_matrix)))
+
+bg_map <- bitr(
+  bg_ens,
+  fromType = "ENSEMBL",
+  toType   = c("ENTREZID", "SYMBOL"),
+  OrgDb    = org.Hs.eg.db
+)
+
+# One row per ENSEMBL–ENTREZ pair
+bg_map <- dplyr::distinct(bg_map, ENSEMBL, ENTREZID, .keep_all = TRUE)
+
+bg_entrez       <- unique(bg_map$ENTREZID)
+bg_unmapped_ens <- setdiff(bg_ens, bg_map$ENSEMBL)   # largely lncRNAs / non-coding
+
+cat("Background size (ENSEMBL):", length(bg_ens), "\n")
+cat("Mapped to ENTREZ:",         length(bg_entrez), "\n")
+cat("Unmapped (putative lncRNAs/non-coding):", length(bg_unmapped_ens), "\n")
+
+write_csv(bg_map,
+          file.path(enrich_dir, "Background_ENSEMBL_to_ENTREZ.csv"))
+write_csv(
+  tibble(ENSEMBL_unmapped = bg_unmapped_ens),
+  file.path(enrich_dir, "Background_ENSEMBL_unmapped_putative_lncRNAs.csv")
+)
+
+# 4) Helper: map any ENSG list -> ENTREZ + keep unmapped ------------------
+map_set <- function(ens_ids, bg_map) {
+  x <- tibble(ENSEMBL = strip_version(ens_ids)) %>%
+    distinct() %>%
+    left_join(bg_map, by = "ENSEMBL")
+  list(
+    table        = x,
+    entrez       = unique(na.omit(x$ENTREZID)),
+    unmapped_ens = unique(x$ENSEMBL[is.na(x$ENTREZID)])
+  )
+}
+
+# 5) Plug in YOUR gene sets (using your actual object names) --------------
+#    - prognostic_genes: Cox OS FDR < 0.05
+#    - diagnostic_genes_sig: union of significant DEGs across cluster contrasts
+#    - prog_diag_overlap: “double-hit” genes (prognostic + diagnostic)
+
+prog_ids    <- prognostic_genes$gene_id
+diag_ids    <- diagnostic_genes_sig$gene_id
+overlap_ids <- prog_diag_overlap$gene_id
+
+prog_map    <- map_set(prog_ids,    bg_map)
+diag_map    <- map_set(diag_ids,    bg_map)
+overlap_map <- map_set(overlap_ids, bg_map)
+
+cat("\nPrognostic genes: total =", length(prog_ids),
+    " | mapped =", length(prog_map$entrez),
+    " | unmapped =", length(prog_map$unmapped_ens), "\n")
+
+cat("Diagnostic genes: total =", length(diag_ids),
+    " | mapped =", length(diag_map$entrez),
+    " | unmapped =", length(diag_map$unmapped_ens), "\n")
+
+cat("Overlap genes: total =", length(overlap_ids),
+    " | mapped =", length(overlap_map$entrez),
+    " | unmapped =", length(overlap_map$unmapped_ens), "\n")
+
+write_csv(prog_map$table,
+          file.path(enrich_dir, "Prognostic_ENSEMBL_SYM_ENTREZ.csv"))
+write_csv(diag_map$table,
+          file.path(enrich_dir, "Diagnostic_ENSEMBL_SYM_ENTREZ.csv"))
+write_csv(overlap_map$table,
+          file.path(enrich_dir, "ProgDiagOverlap_ENSEMBL_SYM_ENTREZ.csv"))
+
+# 6) Generic function to run GO BP + Reactome -----------------------------
+run_enrich <- function(entrez_vec, universe, out_prefix,
+                       q_cut = 0.05, min_gs = 10, max_gs = 500) {
+  entrez_vec <- unique(na.omit(entrez_vec))
+  if (length(entrez_vec) < 5L) {
+    message(out_prefix, ": not enough genes after mapping; skipping.")
+    return(NULL)
+  }
+
+  # GO Biological Process
+  ego_bp <- enrichGO(
+    gene          = entrez_vec,
+    universe      = universe,
+    OrgDb         = org.Hs.eg.db,
+    keyType       = "ENTREZID",
+    ont           = "BP",
+    pAdjustMethod = "BH",
+    pvalueCutoff  = q_cut,
+    qvalueCutoff  = q_cut,
+    minGSSize     = min_gs,
+    maxGSSize     = max_gs,
+    readable      = TRUE
+  )
+
+  # Reactome pathways
+  e_react <- enrichPathway(
+    gene          = entrez_vec,
+    universe      = universe,
+    pAdjustMethod = "BH",
+    pvalueCutoff  = q_cut,
+    qvalueCutoff  = q_cut,
+    minGSSize     = min_gs,
+    maxGSSize     = max_gs,
+    readable      = TRUE
+  )
+
+  # Save tables
+  if (!is.null(ego_bp) && nrow(as.data.frame(ego_bp)) > 0) {
+    write.csv(as.data.frame(ego_bp),
+              file.path(enrich_dir, paste0(out_prefix, "_GO_BP.csv")),
+              row.names = FALSE)
+  }
+
+  if (!is.null(e_react) && nrow(as.data.frame(e_react)) > 0) {
+    write.csv(as.data.frame(e_react),
+              file.path(enrich_dir, paste0(out_prefix, "_Reactome.csv")),
+              row.names = FALSE)
+  }
+
+  invisible(list(GO_BP = ego_bp, Reactome = e_react))
+}
+
+# 7) Run enrichment for the three sets (protein-coding portion) -----------
+enr_prog    <- run_enrich(prog_map$entrez,    bg_entrez, "Prognostic")
+enr_diag    <- run_enrich(diag_map$entrez,    bg_entrez, "Diagnostic")
+enr_overlap <- run_enrich(overlap_map$entrez, bg_entrez, "ProgDiagOverlap")
+
+## ======================================================================
+## lncRNA PRESERVATION PART – annotate what bitr *couldn't* map
+## ======================================================================
+
+# 8) Collect the unmapped ENSG IDs (mostly lncRNAs / non-coding) ----------
+lnc_sets <- list(
+  Prognostic      = prog_map$unmapped_ens,
+  Diagnostic      = diag_map$unmapped_ens,
+  ProgDiagOverlap = overlap_map$unmapped_ens
+)
+
+# Connect to Ensembl (run this on your laptop / RStudio if Cedar blocks web)
+mart <- useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+
+lnc_biotypes <- c(
+  "lncRNA", "antisense", "sense_intronic", "sense_overlapping",
+  "processed_transcript", "3prime_overlapping_ncRNA",
+  "macro_lncRNA", "non_coding"
+)
+
+annot_one <- function(ens_vec, set_name) {
+  ens_vec <- unique(ens_vec)
+  if (!length(ens_vec)) {
+    message("No unmapped genes for ", set_name)
+    return(NULL)
+  }
+
+  ann <- getBM(
+    attributes = c("ensembl_gene_id", "hgnc_symbol",
+                   "gene_biotype", "description"),
+    filters    = "ensembl_gene_id",
+    values     = ens_vec,
+    mart       = mart
+  )
+
+  ann$set <- set_name
+  ann$lnc_flag <- ann$gene_biotype %in% lnc_biotypes |
+                  grepl("lnc", ann$gene_biotype, ignore.case = TRUE)
+
+  out_csv <- file.path(
+    enrich_dir,
+    paste0("Unmapped_", set_name, "_ENSEMBL_annotation.csv")
+  )
+  write.csv(ann, out_csv, row.names = FALSE)
+
+  # Plain lists for external lncRNA tools (LncSEA, LncHUB2, ENCORI, etc.)
+  lnc_only <- ann[ann$lnc_flag, , drop = FALSE]
+
+  if (nrow(lnc_only) > 0) {
+    # ENSG list
+    write.table(
+      unique(lnc_only$ensembl_gene_id),
+      file      = file.path(enrich_dir, paste0("lncRNA_", set_name, "_ENSEMBL.txt")),
+      row.names = FALSE, col.names = FALSE, quote = FALSE
+    )
+    # HGNC symbol list
+    write.table(
+      unique(lnc_only$hgnc_symbol[lnc_only$hgnc_symbol != ""]),
+      file      = file.path(enrich_dir, paste0("lncRNA_", set_name, "_HGNC.txt")),
+      row.names = FALSE, col.names = FALSE, quote = FALSE
+    )
+  }
+
+  ann
+}
+
+lnc_annot_list <- imap(lnc_sets, annot_one)
+
+# After this block you have:
+# - Classical GO + Reactome enrichment for the mapped (mostly protein-coding) part
+# - Explicit CSVs for all *unmapped* ENSG IDs per set
+# - Per-set lncRNA-focused gene lists (ENSEMBL + HGNC) ready for lncRNA tools
