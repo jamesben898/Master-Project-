@@ -2916,3 +2916,17 @@ write_csv(
        
 prog_ids <- prognostic_genes$gene_id    # Ensembl IDs with version
 
+# Define the full set of “significant diagnostic genes”
+> # ------------------------------------------------------------------
+> 
+> diagnostic_genes_sig <- sig_DEGs   # just a clearer name
+> 
+> # (Optional) save them as a separate CSV for clarity
+> write_csv(
++     diagnostic_genes_sig,
++     file.path(out_root, "Diagnostic_significant_DE_clusters_union.csv")
++ )
+>                                                                                                  
+> # This is the vector you’ll use for enrichment:
+> diag_ids <- diagnostic_genes_sig$gene_id
+> length(diag_ids)
