@@ -2914,14 +2914,5 @@ write_csv(
   "/Users/junuhbencsik/Biomarkers_K4Clusters/Prognostic_Diagnostic_overlap.csv"
 )
        
-1. Confirm / (re)create your full biomarker lists
-1A. Prognostic biomarkers (Cox survival)
+prog_ids <- prognostic_genes$gene_id    # Ensembl IDs with version
 
-From your script, you already have:
-
-cox_progn_all <- bind_rows(cox_results_list)
-cox_progn_all$padj <- p.adjust(cox_progn_all$pval, method = "BH")
-
-prognostic_genes <- cox_progn_all %>%
-  filter(!is.na(padj), padj < 0.05) %>%   # FDR filter
-  arrange(padj)
